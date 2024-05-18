@@ -1,3 +1,6 @@
 [submodule "croco"]
 	path = croco
 	url = https://github.com/naver/croco
+[submodule "exif-as-language"]
+	path = exif-as-language
+	url = https://github.com/hellomuffin/exif-as-language

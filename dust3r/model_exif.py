@@ -13,13 +13,16 @@ from dust3r.patch_embed import get_patch_embed
 
 import dust3r.utils.path_to_croco  # noqa: F401
 from models.croco import CroCoNet  # noqa
+import exif_as_language.model_wrapper as exif
+from croco.models.pos_embed import RoPE2D
+from transformers import DistilBertTokenizer
 inf = float('inf')
 
 
-class AsymmetricCroCo3DStereo (CroCoNet):
+class AsymmetricCroCo3DStereoAndText (CroCoNet):
     """ Two siamese encoders, followed by two decoders.
     The goal is to output 3d points directly, both images in view1's frame
-    (hence the asymmetry).   
+    (hence the asymmetry).
     """
 
     def __init__(self,
@@ -30,6 +33,7 @@ class AsymmetricCroCo3DStereo (CroCoNet):
                  freeze='none',
                  landscape_only=True,
                  patch_embed_cls='PatchEmbedDust3R',  # PatchEmbedDust3R or ManyAR_PatchEmbed
+                 exif_state_dict_path=None,
                  **croco_kwargs):
         self.patch_embed_cls = patch_embed_cls
         self.croco_args = fill_default_args(croco_kwargs, super().__init__)
@@ -39,6 +43,11 @@ class AsymmetricCroCo3DStereo (CroCoNet):
         self.dec_blocks2 = deepcopy(self.dec_blocks)
         self.set_downstream_head(output_mode, head_type, landscape_only, depth_mode, conf_mode, **croco_kwargs)
         self.set_freeze(freeze)
+
+        self.text_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+        self.text_encoder = exif.load_wrapper_model("cuda", state_dict_path=exif_state_dict_path)[0]
+        self.text_position_encoder = self.text_encoder.model.transformer.get_position_embeddings()
+        self.rope = RoPE2D()
 
     def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768):
         self.patch_embed = get_patch_embed(self.patch_embed_cls, img_size, patch_size, enc_embed_dim)
@@ -74,8 +83,8 @@ class AsymmetricCroCo3DStereo (CroCoNet):
         self.depth_mode = depth_mode
         self.conf_mode = conf_mode
         # allocate heads
-        self.downstream_head1 = head_factory(head_type, output_mode, self, has_conf=bool(conf_mode))
-        self.downstream_head2 = head_factory(head_type, output_mode, self, has_conf=bool(conf_mode))
+        self.downstream_head1 = head_factory(head_type, output_mode, self, has_conf=bool(conf_mode), has_caption=True)
+        self.downstream_head2 = head_factory(head_type, output_mode, self, has_conf=bool(conf_mode), has_caption=True)
         # magic wrapper
         self.head1 = transpose_to_landscape(self.downstream_head1, activate=landscape_only)
         self.head2 = transpose_to_landscape(self.downstream_head2, activate=landscape_only)
@@ -124,12 +133,23 @@ class AsymmetricCroCo3DStereo (CroCoNet):
 
         return (shape1, shape2), (feat1, feat2), (pos1, pos2)
 
-    def _decoder(self, f1, pos1, f2, pos2):
+    def _decoder(self, f1, pos1, f2, pos2, encoded_caption1, position_caption1, encoded_caption2, position_caption2):
         final_output = [(f1, f2)]  # before projection
 
         # project to decoder dim
         f1 = self.decoder_embed(f1)
+        encoded_caption1 = self.decoder_embed(encoded_caption1)
+        f1 = torch.concatenate((f1, encoded_caption1[:, None, :]), dim=1)
+        if len(position_caption1.size()) == 2:
+            position_caption1 = position_caption1[None, :, :]
+        if len(position_caption2.size()) == 2:
+            position_caption2 = position_caption2[None, :, :]
+        pos1 = torch.concatenate((pos1, position_caption1), dim=1)
+
         f2 = self.decoder_embed(f2)
+        encoded_caption2 = self.decoder_embed(encoded_caption2)
+        f2 = torch.concatenate((f2, encoded_caption2[:, None, :]), dim=1)
+        pos2 = torch.concatenate((pos2, position_caption2), dim=1)
 
         final_output.append((f1, f2))
         for blk1, blk2 in zip(self.dec_blocks, self.dec_blocks2):
@@ -155,8 +175,43 @@ class AsymmetricCroCo3DStereo (CroCoNet):
         # encode the two images --> B,S,D
         (shape1, shape2), (feat1, feat2), (pos1, pos2) = self._encode_symmetrized(view1, view2)
 
+        tokenized_caption1 = self.text_tokenizer(
+            view1["caption"], truncation=True, padding="max_length", return_tensors="pt"
+        ).to("cuda")
+        tokenized_caption2 = self.text_tokenizer(
+            view2["caption"], truncation=True, padding="max_length", return_tensors="pt"
+        ).to("cuda")
+
+        caption_1_pos = torch.zeros_like(tokenized_caption1["input_ids"]).to("cuda")
+        for i in range(len(caption_1_pos)):
+            caption_1_pos[i, :] = torch.arange(caption_1_pos.size()[1])
+
+        caption_2_pos = torch.zeros_like(tokenized_caption2["input_ids"]).to("cuda")
+        for i in range(len(caption_2_pos)):
+            caption_2_pos[i, :] = torch.arange(caption_2_pos.size()[1])
+
+        cos_cap1, sin_cap1 = self.rope.get_cos_sin(1, int(caption_1_pos.max()) + 1, tokenized_caption1["input_ids"].device, tokenized_caption1["input_ids"].dtype)
+        cap1_rope = self.rope.apply_rope1d(tokenized_caption1["input_ids"][:, None, :, None], caption_1_pos, cos_cap1, sin_cap1).squeeze()
+
+        cos_cap2, sin_cap2 = self.rope.get_cos_sin(1, int(caption_2_pos.max()) + 1, tokenized_caption2["input_ids"].device, tokenized_caption2["input_ids"].dtype)
+        cap2_rope = self.rope.apply_rope1d(tokenized_caption2["input_ids"][:, None, :, None], caption_2_pos, cos_cap2, sin_cap2).squeeze()
+
+        encoded_caption1 = self.text_encoder.encode_text({
+            "attention_mask": tokenized_caption1["attention_mask"],
+            "input_ids": tokenized_caption1["input_ids"]
+        })
+
+        positions_caption1 = self.text_position_encoder(torch.arange(encoded_caption1.size(0)).to(device="cuda"))
+
+        encoded_caption2 = self.text_encoder.encode_text({
+            "attention_mask": tokenized_caption2["attention_mask"],
+            "input_ids": tokenized_caption2["input_ids"]
+        })
+
+        positions_caption2 = self.text_position_encoder(torch.arange(encoded_caption2.size(0)).to(device="cuda"))
+
         # combine all ref images into object-centric representation
-        dec1, dec2 = self._decoder(feat1, pos1, feat2, pos2)
+        dec1, dec2 = self._decoder(feat1, pos1, feat2, pos2, encoded_caption1, cap1_rope, encoded_caption2, cap2_rope)
 
         with torch.cuda.amp.autocast(enabled=False):
             res1 = self._downstream_head(1, [tok.float() for tok in dec1], shape1)

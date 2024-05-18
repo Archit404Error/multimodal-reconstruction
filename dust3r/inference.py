@@ -8,6 +8,7 @@ import tqdm
 import torch
 from dust3r.utils.device import to_cpu, collate_with_cat
 from dust3r.model import AsymmetricCroCo3DStereo, inf  # noqa: F401, needed when loading the model
+from dust3r.model_exif import AsymmetricCroCo3DStereoAndText
 from dust3r.utils.misc import invalid_to_nans
 from dust3r.utils.geometry import depthmap_to_pts3d, geotrf
 

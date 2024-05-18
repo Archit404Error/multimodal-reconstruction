@@ -8,11 +8,11 @@ from .linear_head import LinearPts3d
 from .dpt_head import create_dpt_head
 
 
-def head_factory(head_type, output_mode, net, has_conf=False):
+def head_factory(head_type, output_mode, net, has_conf=False, has_caption=False):
     """" build a prediction head for the decoder 
     """
     if head_type == 'linear' and output_mode == 'pts3d':
-        return LinearPts3d(net, has_conf)
+        return LinearPts3d(net, has_conf, has_caption=has_caption)
     elif head_type == 'dpt' and output_mode == 'pts3d':
         return create_dpt_head(net, has_conf=has_conf)
     else:

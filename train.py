@@ -28,6 +28,7 @@ from torch.utils.tensorboard import SummaryWriter
 torch.backends.cuda.matmul.allow_tf32 = True  # for gpu >= Ampere and pytorch >= 1.12
 
 from dust3r.model import AsymmetricCroCo3DStereo, inf  # noqa: F401, needed when loading the model
+from dust3r.model_exif import AsymmetricCroCo3DStereoAndText
 from dust3r.datasets import get_data_loader  # noqa
 from dust3r.losses import *  # noqa: F401, needed when loading the model
 from dust3r.inference import loss_of_one_batch  # noqa
@@ -40,7 +41,7 @@ from croco.utils.misc import NativeScalerWithGradNormCount as NativeScaler  # no
 def get_args_parser():
     parser = argparse.ArgumentParser('DUST3R training', add_help=False)
     # model and criterion
-    parser.add_argument('--model', default="AsymmetricCroCo3DStereo(patch_embed_cls='ManyAR_PatchEmbed')",
+    parser.add_argument('--model', default="AsymmetricCroCo3DStereo(patch_embed_cls='ManyAR_PatchEmbed', img_size=(224, 224))",
                         type=str, help="string containing the model to build")
     parser.add_argument('--pretrained', default=None, help='path of a starting checkpoint')
     parser.add_argument('--train_criterion', default="ConfLoss(Regr3D(L21, norm_mode='avg_dis'), alpha=0.2)",
@@ -129,7 +130,7 @@ def main(args):
     print(f'>> Creating train criterion = {args.train_criterion}')
     train_criterion = eval(args.train_criterion).to(device)
     print(f'>> Creating test criterion = {args.test_criterion or args.train_criterion}')
-    test_criterion = eval(args.test_criterion or args.criterion).to(device)
+    test_criterion = eval(args.test_criterion or args.train_criterion).to(device)
 
     model.to(device)
     model_without_ddp = model
