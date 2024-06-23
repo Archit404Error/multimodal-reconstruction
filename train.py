@@ -48,6 +48,10 @@ def get_args_parser():
                         type=str, help="train criterion")
     parser.add_argument('--test_criterion', default=None, type=str, help="test criterion")
 
+    # Dust3r and Exif Weights
+    parser.add_argument('--duster_path', default=None, help='path of dust3r checkpoint used to train multimodal transformer')
+    parser.add_argument('--exif_path', default=None, help='path of exif as language checkpoint used to train multimodal transformer')
+
     # dataset
     parser.add_argument('--train_dataset', required=True, type=str, help="training set")
     parser.add_argument('--test_dataset', default='[None]', type=str, help="testing set")
@@ -141,6 +145,18 @@ def main(args):
         ckpt = torch.load(args.pretrained, map_location=device)
         print(model.load_state_dict(ckpt['model'], strict=False))
         del ckpt  # in case it occupies memory
+
+    if args.duster_path and args.exif_path:
+        print("Loading Pretrained Dust3r and Exif Models...")
+        duster_checkpoint = torch.load(args.duster_path, map_location=device)
+        # exif_checkpoint = torch.load(args.exif_path, map_location=device)
+
+        print(model.load_state_dict(duster_checkpoint['model'], strict=False))
+        # print(model.load_state_dict(exif_checkpoint['model'], strict=False))
+
+        del duster_checkpoint
+        # del exif_checkpoint
+
 
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
     if args.lr is None:  # only base_lr is specified

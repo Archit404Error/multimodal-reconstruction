@@ -29,10 +29,10 @@ from .datautils.data_helpers import *
 from .datautils.depth_helpers import *
 
 
-def subsample_data(save_dir, pairs, dicts):
+def subsample_data(save_dir, pairs, dicts, subsampled_pair_path, subsampled_dict_path, skip_amt=10000):
     required_paths = set()
     new_pairs = []
-    for i in tqdm(range(1, len(pairs), 10_000)):
+    for i in tqdm(range(1, len(pairs), skip_amt)):
         cur_pair = pairs[i]
         new_pairs.append(cur_pair)
         required_paths.add(cur_pair[0])
@@ -41,16 +41,17 @@ def subsample_data(save_dir, pairs, dicts):
     new_dicts = {img_path: dicts[img_path] for img_path in dicts if img_path in required_paths}
     assert len(new_dicts) == len(required_paths)
 
-    with open(f"{save_dir}/subsampled_pairs.pkl", "wb") as f:
+    with open(f"{save_dir}/{subsampled_pair_path}", "wb") as f:
         pickle.dump(new_pairs, f)
-    with open(f"{save_dir}/subsampled_dicts.pkl", "wb") as f:
+    with open(f"{save_dir}/{subsampled_dict_path}", "wb") as f:
         pickle.dump(new_dicts, f)
 
     return new_pairs, new_dicts
 
 
 class MegaScenes(BaseStereoViewDataset):
-    def __init__(self, data_root, save_dir, subsampled=True, *args, **kwargs):
+    def __init__(self, data_root, save_dir, subsampled=True, subsampled_pair_path="large_subsampled_pairs.pkl",
+                 subsampled_dict_path="large_subsampled_dicts.pkl", *args, **kwargs):
         
         super().__init__(*args, **kwargs)
 
@@ -63,14 +64,14 @@ class MegaScenes(BaseStereoViewDataset):
         # with open(join(data_root, f'large_{self.split}_images.pkl'), 'rb') as f:
         #     imgdicts = pickle.load(f)
 
-        if subsampled and osp.exists(f"{save_dir}/subsampled_pairs.pkl"):
-            pairs = pickle.load(open(f"{save_dir}/subsampled_pairs.pkl", "rb"))
-            imgdicts = pickle.load(open(f"{save_dir}/subsampled_dicts.pkl", "rb"))
+        if subsampled and osp.exists(f"{save_dir}/{subsampled_pair_path}"):
+            pairs = pickle.load(open(f"{save_dir}/{subsampled_pair_path}", "rb"))
+            imgdicts = pickle.load(open(f"{save_dir}/{subsampled_dict_path}", "rb"))
         else:
             pairs = []
             imgdicts = {}
             if self.split == 'train':
-                indices = ['10']
+                indices = ['10', '20', '30']
                 for i in tqdm(indices):
                     with open(join(data_root, f'grouped_pairs/large_pairs_{i}.pkl'), 'rb') as f:
                         pairs.extend(pickle.load(f))
@@ -84,8 +85,8 @@ class MegaScenes(BaseStereoViewDataset):
                     imgdicts = pickle.load(f)
 
             if subsampled:
-                if not osp.exists(f"{save_dir}/subsampled_pairs.pkl"):
-                    pairs, imgdicts = subsample_data(save_dir, pairs, imgdicts)
+                if not osp.exists(f"{save_dir}/{subsampled_pair_path}"):
+                    pairs, imgdicts = subsample_data(save_dir, pairs, imgdicts, subsampled_pair_path, subsampled_dict_path)
 
         metadata_files = {}
         image_exifs = {}
@@ -94,7 +95,10 @@ class MegaScenes(BaseStereoViewDataset):
             if not osp.exists(metadata_file_path):
                 continue
             if metadata_file_path not in metadata_files:
-                metadata = json.load(open(metadata_file_path))["elements"]
+                try:
+                    metadata = json.load(open(metadata_file_path))["elements"]
+                except:
+                    continue
                 title_exif_map = {}
                 for page_dict in metadata:
                     for page_id, page_data in page_dict.items():

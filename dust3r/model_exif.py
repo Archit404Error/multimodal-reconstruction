@@ -15,7 +15,7 @@ import dust3r.utils.path_to_croco  # noqa: F401
 from models.croco import CroCoNet  # noqa
 import exif_as_language.model_wrapper as exif
 from croco.models.pos_embed import RoPE2D
-from transformers import DistilBertTokenizer
+from transformers import DistilBertTokenizer, AlbertTokenizer
 inf = float('inf')
 
 
@@ -44,9 +44,8 @@ class AsymmetricCroCo3DStereoAndText (CroCoNet):
         self.set_downstream_head(output_mode, head_type, landscape_only, depth_mode, conf_mode, **croco_kwargs)
         self.set_freeze(freeze)
 
-        self.text_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+        self.text_tokenizer = AlbertTokenizer.from_pretrained('albert-large-v2')
         self.text_encoder = exif.load_wrapper_model("cuda", state_dict_path=exif_state_dict_path)[0]
-        self.text_position_encoder = self.text_encoder.model.transformer.get_position_embeddings()
         self.rope = RoPE2D()
 
     def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768):
@@ -67,6 +66,7 @@ class AsymmetricCroCo3DStereoAndText (CroCoNet):
             'none':     [],
             'mask':     [self.mask_token],
             'encoder':  [self.mask_token, self.patch_embed, self.enc_blocks],
+            'all-duster': [self.mask_token, self.patch_embed, self.enc_blocks, self.dec_blocks, self.dec_blocks2]
         }
         freeze_all_params(to_be_frozen[freeze])
 
@@ -201,14 +201,10 @@ class AsymmetricCroCo3DStereoAndText (CroCoNet):
             "input_ids": tokenized_caption1["input_ids"]
         })
 
-        positions_caption1 = self.text_position_encoder(torch.arange(encoded_caption1.size(0)).to(device="cuda"))
-
         encoded_caption2 = self.text_encoder.encode_text({
             "attention_mask": tokenized_caption2["attention_mask"],
             "input_ids": tokenized_caption2["input_ids"]
         })
-
-        positions_caption2 = self.text_position_encoder(torch.arange(encoded_caption2.size(0)).to(device="cuda"))
 
         # combine all ref images into object-centric representation
         dec1, dec2 = self._decoder(feat1, pos1, feat2, pos2, encoded_caption1, cap1_rope, encoded_caption2, cap2_rope)
